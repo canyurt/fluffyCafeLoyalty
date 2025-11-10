@@ -1,7 +1,8 @@
 from datetime import datetime
 from typing import Any
 from google.cloud import documentai
-from .config import settings
+#from .config import settings
+from app.config import settings
 
 def extract_fields_from_receipt(gcs_uri: str) -> dict[str, Any]:
     if not settings.documentai_processor_id:
