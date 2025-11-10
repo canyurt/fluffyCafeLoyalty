@@ -21,6 +21,7 @@ async def upload_receipt(
         )
     contents = await receipt.read()
     object_path = upload_receipt(user["uid"], contents, receipt.content_type)
+    print(f"Receipt saved at:{object_path}")
     receipt_id = str(uuid.uuid4())
     record = {
         "receipt_id": receipt_id,
