@@ -9,4 +9,4 @@ firebase-admin==6.4.0
 pydantic==2.8.2
 pydantic-settings==2.4.0
 requests==2.32.3
-#google-cloud-documentai==3.0.0   # or remove if you stay with Vision
+google-cloud-documentai==3.0.0   # or remove if you stay with Vision
