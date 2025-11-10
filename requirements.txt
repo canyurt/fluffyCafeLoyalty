@@ -1,0 +1,12 @@
+fastapi==0.115.0
+uvicorn[standard]==0.30.3
+gunicorn==21.2.0
+python-multipart==0.0.9
+google-cloud-firestore==2.15.0
+google-cloud-storage==2.16.0
+google-cloud-secret-manager==2.19.0
+firebase-admin==6.4.0
+pydantic==2.8.2
+pydantic-settings==2.4.0
+requests==2.32.3
+#google-cloud-documentai==3.0.0   # or remove if you stay with Vision
