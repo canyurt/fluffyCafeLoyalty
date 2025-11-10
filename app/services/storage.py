@@ -1,6 +1,7 @@
 import uuid
 from google.cloud import storage
-from .config import settings
+#from .config import settings
+from app.config import settings
 
 storage_client = storage.Client()
 bucket = storage_client.bucket(settings.storage_receipts_bucket)
