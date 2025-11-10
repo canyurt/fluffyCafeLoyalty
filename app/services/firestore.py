@@ -1,7 +1,9 @@
 from typing import Any, Mapping
 from firebase_admin import firestore
 from google.cloud.firestore_v1 import Client
-from .config import settings
+# from .config import settings
+from app.config import settings
+
 
 db: Client = firestore.client(app=None)
 
