@@ -5,7 +5,8 @@ from google.cloud import secretmanager
 from .config import settings
 
 cred = credentials.Certificate(settings.firebase_cert_path)
-initialize_app(cred, name=settings.firebase_app_name)
+#initialize_app(cred, name=settings.firebase_app_name)
+initialize_app(cred)
 
 def get_current_user(authorization: str = Header(...)):
     if not authorization.lower().startswith("bearer "):
