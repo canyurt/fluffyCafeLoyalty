@@ -195,43 +195,66 @@ async def upload_receipt_endpoint(
     def process_receipt_in_background():
         """Background task to extract OCR data"""
         try:
+            # # Run Vision API OCR
+            # gcs_uri = f"gs://{settings.storage_receipts_bucket}/{object_name}"
+            # image = vision.Image()
+            # image.source.image_uri = gcs_uri
+            
+            # response = vision_client.text_detection(image=image)
+            # texts = response.text_annotations
+            
+            # # Extract data
+            # full_text = texts[0].description if texts else ""
+            
+            # # Simple parsing (you can enhance this)
+            # merchant_name = None
+            # total_amount = None
+            
+            # lines = full_text.split("\n")
+            # for line in lines:
+            #     line_upper = line.upper()
+            #     if "FLUFFY" in line_upper or "CAFE" in line_upper:
+            #         merchant_name = line.strip()
+            #     if "TOTAL" in line_upper or "$" in line or "€" in line:
+            #         # Try to extract number
+            #         import re
+            #         amounts = re.findall(r'\d+[.,]\d{2}', line)
+            #         if amounts:
+            #             total_amount = amounts[-1]  # Take last number
+            
+            # # Update Firestore with results
+            # update_data = {
+            #     "status": "ready",
+            #     "merchant_name": merchant_name or "Unknown",
+            #     "total_amount": total_amount or "0.00",
+            #     "raw_text": full_text[:500],  # Truncate for storage
+            #     "processed_at": datetime.utcnow().isoformat()
+            # }
+            
+            # doc_ref.update(update_data)
+            
             # Run Vision API OCR
             gcs_uri = f"gs://{settings.storage_receipts_bucket}/{object_name}"
             image = vision.Image()
             image.source.image_uri = gcs_uri
-            
             response = vision_client.text_detection(image=image)
             texts = response.text_annotations
             
-            # Extract data
             full_text = texts[0].description if texts else ""
             
-            # Simple parsing (you can enhance this)
-            merchant_name = None
-            total_amount = None
+            # NEW: Convert to structured schema + markdown
+            receipt_data, markdown_text = parse_receipt_text(full_text)
             
-            lines = full_text.split("\n")
-            for line in lines:
-                line_upper = line.upper()
-                if "FLUFFY" in line_upper or "CAFE" in line_upper:
-                    merchant_name = line.strip()
-                if "TOTAL" in line_upper or "$" in line or "€" in line:
-                    # Try to extract number
-                    import re
-                    amounts = re.findall(r'\d+[.,]\d{2}', line)
-                    if amounts:
-                        total_amount = amounts[-1]  # Take last number
-            
-            # Update Firestore with results
             update_data = {
                 "status": "ready",
-                "merchant_name": merchant_name or "Unknown",
-                "total_amount": total_amount or "0.00",
-                "raw_text": full_text[:500],  # Truncate for storage
-                "processed_at": datetime.utcnow().isoformat()
+                "processed_at": datetime.utcnow().isoformat(),
+                "raw_text": full_text[:1500],  # store raw for debugging
+                "receipt_data": receipt_data,   # structured JSON
+                "markdown_view": markdown_text, # markdown formatted receipt
             }
             
             doc_ref.update(update_data)
+
             
         except Exception as e:
             # Log error and update status
@@ -247,6 +270,112 @@ async def upload_receipt_endpoint(
         "receipt_id": receipt_id,
         "processing_status": "queued"
     }
+
+
+
+
+import re
+
+def parse_receipt_text(full_text: str):
+    """
+    Convert OCR text into structured data (schema) + markdown view.
+    Assumes receipt layout is fixed (Fluffy Café receipts).
+    """
+
+    lines = [line.strip() for line in full_text.split("\n") if line.strip()]
+
+    # Extract header & metadata
+    store_name = lines[1]
+    terminal_info = lines[2]
+    statement = lines[3]
+    statement_no = statement.replace("Statement", "").strip()
+
+    # Extract date/time (regex matches dd/mm/yyyy, hh:mm)
+    datetime_match = re.search(r"(\d{2}/\d{2}/\d{4}),\s*(\d{2}:\d{2})", full_text)
+    date = datetime_match.group(1) if datetime_match else ""
+    time = datetime_match.group(2) if datetime_match else ""
+
+    # Extract table
+    table_line = next((l for l in lines if "Tafel" in l or "Table" in l), None)
+    table = table_line.replace("Floor plan", "").strip() if table_line else ""
+
+    # Extract tax ID
+    tax_id_match = re.search(r"Btw[: ]+([A-Z0-9]+)", full_text)
+    tax_id = tax_id_match.group(1) if tax_id_match else None
+
+    # Extract items by identifying price-aligned lines
+    items = []
+    for line in lines:
+        m = re.match(r"(.+?)\s+(\d+[.,]\d{2})$", line)
+        if m:
+            name = m.group(1).strip()
+            price = float(m.group(2).replace(",", "."))
+            items.append({"name": name, "price": price})
+
+    total = sum(item["price"] for item in items)
+
+    # Build structured schema
+    data = {
+        "store_name": store_name,
+        "statement_id": statement_no,
+        "date": date,
+        "time": time,
+        "table": table,
+        "items": items,
+        "subtotal": total,
+        "tax_id": tax_id,
+    }
+
+    # Build markdown representation
+    markdown = f"# {store_name}\n\n"
+    markdown += f"**Date:** {date} {time}\n"
+    markdown += f"**Table:** {table}\n\n---\n\n"
+    markdown += "| Item | Price (€) |\n|------|-----------:|\n"
+    for item in items:
+        markdown += f"| {item['name']} | {item['price']:.2f} |\n"
+    markdown += f"| **Total** | **{total:.2f}** |\n\n"
+    markdown += f"**Tax ID:** {tax_id}\n"
+
+    return data, markdown
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+# ============================================================================
+# ============================================================================
+# ============================================================================
+#
+# API SECTION
+#
+# ============================================================================
+# ============================================================================
+# ============================================================================
+
+
+
+
 
 
 # ============================================================================
