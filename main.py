@@ -720,6 +720,159 @@ async def upload_receipt_endpoint(
 #     return receipt_data, markdown_text
 
 
+# import re
+# from typing import List, Dict, Optional, Tuple
+
+
+# def parse_receipt_text(full_text: str) -> Tuple[Dict, str]:
+#     """
+#     Convert OCR text into structured data (schema) + markdown view.
+#     Assumes receipt layout is fixed (Fluffy Café receipts).
+#     """
+#     text = (full_text or "").replace("\r", "")
+#     store_match = re.search(r"(Fluffy\s+Cafe-?Restaur[a-z]*)", text, re.IGNORECASE)
+#     store_name = (
+#         re.sub(r"\s+", " ", store_match.group(1)).strip()
+#         if store_match
+#         else "Fluffy Cafe-Restaurant"
+#     )
+
+#     terminal_match = re.search(r"([A-Za-z][A-Za-z0-9]*)\s*/\s*([A-Za-z0-9\-]+)", text)
+#     order_device = terminal_match.group(1).strip() if terminal_match else None
+#     employee_no = terminal_match.group(2).strip() if terminal_match else None
+
+#     statement_match = re.search(r"Statement\s+([A-Z0-9.\-]+)", text, re.IGNORECASE)
+#     statement_number = statement_match.group(1) if statement_match else None
+
+#     datetime_match = re.search(r"(\d{2}/\d{2}/\d{4}),\s*(\d{2}:\d{2})", text)
+#     date = datetime_match.group(1) if datetime_match else ""
+#     time = datetime_match.group(2) if datetime_match else ""
+
+#     table_match = re.search(r"(?:Tafel|Table)\s*(\d+)", text, re.IGNORECASE)
+#     table = table_match.group(1) if table_match else None
+
+#     # isolate the segment containing the item names
+#     items_region_start = table_match.end() if table_match else 0
+#     items_region = text[items_region_start:]
+#     amount_match = re.search(r"Amount\s+due", items_region, re.IGNORECASE)
+#     if not amount_match:
+#         amount_match = re.search(r"Amount", items_region, re.IGNORECASE)
+#     if amount_match:
+#         items_region = items_region[:amount_match.start()]
+
+#     items_region = (
+#         items_region.replace("\n", " ")
+#         .replace("\t", " ")
+#         .replace("\r", " ")
+#         .replace("•", " ")
+#     )
+#     items_region = re.sub(r"\s+", " ", items_region).strip(" ,-:")
+
+#     def split_items(segment: str) -> List[str]:
+#         tokens: List[str] = []
+#         buffer: List[str] = []
+#         for idx, ch in enumerate(segment):
+#             buffer.append(ch)
+#             next_char = segment[idx + 1] if idx + 1 < len(segment) else ""
+#             if ch.islower() and next_char.isupper():
+#                 token = "".join(buffer).strip(" ,-:")
+#                 if token:
+#                     tokens.append(token)
+#                 buffer = []
+#         residual = "".join(buffer).strip(" ,-:")
+#         if residual:
+#             tokens.append(residual)
+#         return tokens
+
+#     raw_tokens = split_items(items_region)
+#     item_names: List[str] = []
+#     for token in raw_tokens:
+#         cleaned = token.strip()
+#         if not cleaned:
+#             continue
+#         lowered = cleaned.lower()
+#         if any(
+#             keyword in lowered
+#             for keyword in ("floor plan", "amount", "division", "payment", "btw", "tax")
+#         ):
+#             continue
+#         if lowered.startswith(("table", "taf")):
+#             continue
+#         item_names.append(cleaned)
+
+#     price_pattern = re.compile(r"\d+[.,]\d{2}")
+#     total_match = re.search(r"€\s*([\d.,]+)", text)
+#     total_amount = float(total_match.group(1).replace(",", ".")) if total_match else None
+#     total_idx = total_match.start() if total_match else len(text)
+
+#     price_matches_zone = [
+#         m
+#         for m in price_pattern.finditer(text)
+#         if m.start() >= items_region_start and m.start() < total_idx
+#     ]
+#     price_values_zone = [float(m.group().replace(",", ".")) for m in price_matches_zone]
+#     if item_names and len(price_values_zone) >= len(item_names):
+#         price_values = price_values_zone[-len(item_names):]
+#     else:
+#         price_values = price_values_zone
+
+#     items: List[Dict] = []
+#     for idx, name in enumerate(item_names):
+#         price_value: Optional[float] = None
+#         if idx < len(price_values):
+#             price_value = round(price_values[idx], 2)
+#             # Round to two decimals consistently
+#             price_value = float(f"{price_value:.2f}")
+#         items.append({"name": name, "price": price_value})
+
+#     if total_amount is None and items:
+#         summed = sum(item["price"] for item in items if item["price"] is not None)
+#         total_amount = round(summed, 2) if summed else None
+
+#     tax_match = re.search(r"Btw[: ]+([A-Z0-9]+)", text, re.IGNORECASE)
+#     tax_id = tax_match.group(1) if tax_match else None
+
+#     receipt_data = {
+#         "store_name": store_name,
+#         "statement_number": statement_number,
+#         "order_device": order_device,
+#         "employee_no": employee_no,
+#         "date": date,
+#         "time": time,
+#         "table": table,
+#         "items": items,
+#         "total_amount": total_amount,
+#         "tax_id": tax_id,
+#     }
+
+#     markdown_lines = [f"# {store_name}", ""]
+#     if date or time:
+#         markdown_lines.append(f"**Date:** {date} {time}".strip())
+#     if table:
+#         markdown_lines.append(f"**Table:** {table}")
+#     if statement_number:
+#         markdown_lines.append(f"**Statement:** {statement_number}")
+#     assignment_parts = []
+#     if order_device:
+#         assignment_parts.append(f"Device: {order_device}")
+#     if employee_no:
+#         assignment_parts.append(f"Employee: {employee_no}")
+#     if assignment_parts:
+#         markdown_lines.append("**Assignment:** " + " | ".join(assignment_parts))
+#     markdown_lines.append("\n---\n")
+#     markdown_lines.append("| Item | Price (€) |\n|------|-----------:|")
+#     for item in items:
+#         price_text = f"{item['price']:.2f}" if item["price"] is not None else ""
+#         markdown_lines.append(f"| {item['name']} | {price_text} |")
+#     if total_amount is not None:
+#         markdown_lines.append(f"| **Total** | **{total_amount:.2f}** |")
+#     markdown_lines.append("")
+#     if tax_id:
+#         markdown_lines.append(f"**Tax ID:** {tax_id}")
+#     markdown_text = "\n".join(markdown_lines)
+
+#     return receipt_data, markdown_text
+
 import re
 from typing import List, Dict, Optional, Tuple
 
@@ -728,6 +881,7 @@ def parse_receipt_text(full_text: str) -> Tuple[Dict, str]:
     """
     Convert OCR text into structured data (schema) + markdown view.
     Assumes receipt layout is fixed (Fluffy Café receipts).
+    Fixed to properly extract multiple items with individual prices.
     """
     text = (full_text or "").replace("\r", "")
     store_match = re.search(r"(Fluffy\s+Cafe-?Restaur[a-z]*)", text, re.IGNORECASE)
@@ -751,7 +905,7 @@ def parse_receipt_text(full_text: str) -> Tuple[Dict, str]:
     table_match = re.search(r"(?:Tafel|Table)\s*(\d+)", text, re.IGNORECASE)
     table = table_match.group(1) if table_match else None
 
-    # isolate the segment containing the item names
+    # Find the section between table and "Amount due"
     items_region_start = table_match.end() if table_match else 0
     items_region = text[items_region_start:]
     amount_match = re.search(r"Amount\s+due", items_region, re.IGNORECASE)
@@ -760,75 +914,72 @@ def parse_receipt_text(full_text: str) -> Tuple[Dict, str]:
     if amount_match:
         items_region = items_region[:amount_match.start()]
 
-    items_region = (
-        items_region.replace("\n", " ")
-        .replace("\t", " ")
-        .replace("\r", " ")
-        .replace("•", " ")
-    )
-    items_region = re.sub(r"\s+", " ", items_region).strip(" ,-:")
+    # Extract all prices in this region
+    price_pattern = re.compile(r"(\d+[.,]\d{2})")
+    price_matches = list(price_pattern.finditer(items_region))
+    price_values = [float(m.group().replace(",", ".")) for m in price_matches]
 
-    def split_items(segment: str) -> List[str]:
-        tokens: List[str] = []
-        buffer: List[str] = []
-        for idx, ch in enumerate(segment):
-            buffer.append(ch)
-            next_char = segment[idx + 1] if idx + 1 < len(segment) else ""
-            if ch.islower() and next_char.isupper():
-                token = "".join(buffer).strip(" ,-:")
-                if token:
-                    tokens.append(token)
-                buffer = []
-        residual = "".join(buffer).strip(" ,-:")
-        if residual:
-            tokens.append(residual)
-        return tokens
-
-    raw_tokens = split_items(items_region)
+    # Split items_region by newlines and process line by line
+    lines = items_region.split('\n')
     item_names: List[str] = []
-    for token in raw_tokens:
-        cleaned = token.strip()
-        if not cleaned:
+    
+    for line in lines:
+        line = line.strip()
+        if not line:
             continue
-        lowered = cleaned.lower()
+        
+        # Remove leading/trailing special characters and whitespace
+        line = re.sub(r"^[\s•\-=:,]+|[\s•\-=:,]+$", "", line)
+        if not line:
+            continue
+        
+        lowered = line.lower()
+        
+        # Skip lines that are metadata/non-items
         if any(
             keyword in lowered
             for keyword in ("floor plan", "amount", "division", "payment", "btw", "tax")
         ):
             continue
-        if lowered.startswith(("table", "taf")):
+        if lowered.startswith(("table", "taf", "restaurant")):
             continue
-        item_names.append(cleaned)
+        
+        # Remove any trailing price from the line itself
+        # (in case OCR put price on same line)
+        line_cleaned = re.sub(r'\s*\d+[.,]\d{2}\s*$', '', line).strip()
+        
+        if line_cleaned:
+            item_names.append(line_cleaned)
 
-    price_pattern = re.compile(r"\d+[.,]\d{2}")
+    # Match items with prices
+    # Use the last N prices for the N items found
+    items: List[Dict] = []
+    
+    if item_names and len(price_values) >= len(item_names):
+        # Align: use the last N prices for N items
+        price_values = price_values[-len(item_names):]
+        for idx, name in enumerate(item_names):
+            price_value = round(price_values[idx], 2)
+            price_value = float(f"{price_value:.2f}")
+            items.append({"name": name, "price": price_value})
+    elif item_names:
+        # Fewer prices than items - assign what we have
+        for idx, name in enumerate(item_names):
+            price_value: Optional[float] = None
+            if idx < len(price_values):
+                price_value = round(price_values[idx], 2)
+                price_value = float(f"{price_value:.2f}")
+            items.append({"name": name, "price": price_value})
+
+    # Extract total amount
     total_match = re.search(r"€\s*([\d.,]+)", text)
     total_amount = float(total_match.group(1).replace(",", ".")) if total_match else None
-    total_idx = total_match.start() if total_match else len(text)
-
-    price_matches_zone = [
-        m
-        for m in price_pattern.finditer(text)
-        if m.start() >= items_region_start and m.start() < total_idx
-    ]
-    price_values_zone = [float(m.group().replace(",", ".")) for m in price_matches_zone]
-    if item_names and len(price_values_zone) >= len(item_names):
-        price_values = price_values_zone[-len(item_names):]
-    else:
-        price_values = price_values_zone
-
-    items: List[Dict] = []
-    for idx, name in enumerate(item_names):
-        price_value: Optional[float] = None
-        if idx < len(price_values):
-            price_value = round(price_values[idx], 2)
-            # Round to two decimals consistently
-            price_value = float(f"{price_value:.2f}")
-        items.append({"name": name, "price": price_value})
 
     if total_amount is None and items:
         summed = sum(item["price"] for item in items if item["price"] is not None)
         total_amount = round(summed, 2) if summed else None
 
+    # Extract tax ID
     tax_match = re.search(r"Btw[: ]+([A-Z0-9]+)", text, re.IGNORECASE)
     tax_id = tax_match.group(1) if tax_match else None
 
@@ -845,6 +996,7 @@ def parse_receipt_text(full_text: str) -> Tuple[Dict, str]:
         "tax_id": tax_id,
     }
 
+    # Build markdown view
     markdown_lines = [f"# {store_name}", ""]
     if date or time:
         markdown_lines.append(f"**Date:** {date} {time}".strip())
