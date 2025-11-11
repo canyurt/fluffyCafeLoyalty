@@ -449,8 +449,140 @@ async def upload_receipt_endpoint(
 
 #     return receipt_data, markdown_text
 
+# import re
+# from typing import List, Dict, Tuple  # ensure this import is present once near the top of the file
+
+
+# def parse_receipt_text(full_text: str) -> Tuple[Dict, str]:
+#     """
+#     Convert OCR text from Fluffy Café receipts into structured data + markdown.
+#     """
+#     text = (full_text or "").replace("\r", "")
+#     text_lower = text.lower()
+#     text_compact = re.sub(r"\s+", " ", text).strip()
+
+#     # Store name
+#     store_match = re.search(r"(Fluffy\s+Cafe-?Restaur[a-z]*)", text, re.IGNORECASE)
+#     store_name = store_match.group(1).strip() if store_match else None
+
+#     # Order device / employee number (e.g. "iPad1/696233-Merve")
+#     terminal_match = re.search(r"([A-Za-z][A-Za-z0-9]*)\s*/\s*([A-Za-z0-9\-]+)", text)
+#     order_device = terminal_match.group(1) if terminal_match else None
+#     employee_no = terminal_match.group(2) if terminal_match else None
+
+#     # Statement number (e.g. "Statement N939388.21511")
+#     statement_match = re.search(r"Statement\s+([A-Z0-9.\-]+)", text, re.IGNORECASE)
+#     statement_number = statement_match.group(1) if statement_match else None
+
+#     # Date / time
+#     datetime_match = re.search(r"(\d{2}/\d{2}/\d{4}),\s*(\d{2}:\d{2})", text)
+#     date = datetime_match.group(1) if datetime_match else ""
+#     time = datetime_match.group(2) if datetime_match else ""
+
+#     # Table number (only the numeric part)
+#     table_match = re.search(r"(?:Tafel|Table)\s+(\d+)", text, re.IGNORECASE)
+#     table = table_match.group(1) if table_match else None
+#     table_end_idx = table_match.end() if table_match else 0
+
+#     # Segment containing menu items (between table info and "Amount …")
+#     amount_due_idx = text_lower.find("amount due")
+#     if amount_due_idx == -1:
+#         amount_due_idx = text_lower.find("amount")
+#     if amount_due_idx == -1:
+#         amount_due_idx = len(text)
+
+#     items_section = text[table_end_idx:amount_due_idx] if table_end_idx < amount_due_idx else ""
+#     items_section = re.sub(r"Floor plan[^,]*,\s*(?:Tafel|Table)\s+\d+", "", items_section, flags=re.IGNORECASE)
+#     items_section = re.sub(r"\s+", " ", items_section).strip()
+
+#     item_pattern = re.compile(r"[A-Z][\w'&-]*(?:\s+[A-Z][\w'&-]*)*")
+#     raw_names = item_pattern.findall(items_section)
+#     blacklist = {"", "Floor", "Plan"}
+#     item_names: List[str] = []
+#     for candidate in raw_names:
+#         if candidate in blacklist or candidate.lower().startswith("floor plan"):
+#             continue
+#         if candidate not in item_names:
+#             item_names.append(candidate.strip())
+
+#     # Monetary values (prefer region after “Btw” before the € total)
+#     euro_idx = text.find("€")
+#     price_region_start = text_lower.find("btw")
+#     if price_region_start == -1:
+#         price_region_start = amount_due_idx
+#     price_region = text[price_region_start:euro_idx] if euro_idx > price_region_start >= 0 else text[price_region_start:]
+#     price_values = re.findall(r"\d+[.,]\d{2}", price_region)
+
+#     if item_names and len(price_values) < len(item_names):
+#         # Fallback: grab trailing monetary values from entire text
+#         price_values = re.findall(r"\d+[.,]\d{2}", text)
+#     if item_names and len(price_values) >= len(item_names):
+#         price_values = price_values[-len(item_names):]
+
+#     item_prices = [float(v.replace(",", ".")) for v in price_values[:len(item_names)]]
+#     while len(item_prices) < len(item_names):
+#         item_prices.append(None)
+
+#     items: List[Dict] = []
+#     for idx, name in enumerate(item_names):
+#         price = item_prices[idx] if idx < len(item_prices) else None
+#         items.append({"name": name, "price": price})
+
+#     # Total amount from the € line
+#     total_match = re.search(r"€\s*([\d.,]+)", text)
+#     total_amount = float(total_match.group(1).replace(",", ".")) if total_match else (
+#         round(sum(p for p in item_prices if p is not None), 2) if item_prices else None
+#     )
+
+#     # Tax ID
+#     tax_match = re.search(r"Btw[: ]+([A-Z0-9]+)", text, re.IGNORECASE)
+#     tax_id = tax_match.group(1) if tax_match else None
+
+#     receipt_data = {
+#         "store_name": store_name,
+#         "statement_number": statement_number,
+#         "order_device": order_device,
+#         "employee_no": employee_no,
+#         "date": date,
+#         "time": time,
+#         "table": table,
+#         "items": items,
+#         "total_amount": total_amount,
+#         "tax_id": tax_id,
+#     }
+
+#     # Markdown view
+#     markdown_lines = [f"# {store_name or 'Fluffy Cafe-Restaurant'}", ""]
+#     if date or time:
+#         markdown_lines.append(f"**Date:** {date} {time}".strip())
+#     if table:
+#         markdown_lines.append(f"**Table:** {table}")
+#     if statement_number:
+#         markdown_lines.append(f"**Statement:** {statement_number}")
+#     if order_device or employee_no:
+#         metadata_parts = []
+#         if order_device:
+#             metadata_parts.append(f"Device: {order_device}")
+#         if employee_no:
+#             metadata_parts.append(f"Employee: {employee_no}")
+#         markdown_lines.append("**Assignment:** " + " | ".join(metadata_parts))
+#     markdown_lines.append("\n---\n")
+#     markdown_lines.append("| Item | Price (€) |\n|------|-----------:|")
+#     for item in items:
+#         price_text = f"{item['price']:.2f}" if item.get("price") is not None else ""
+#         markdown_lines.append(f"| {item['name']} | {price_text} |")
+#     if total_amount is not None:
+#         markdown_lines.append(f"| **Total** | **{total_amount:.2f}** |")
+#     markdown_lines.append("")
+#     if tax_id:
+#         markdown_lines.append(f"**Tax ID:** {tax_id}")
+
+#     markdown_text = "\n".join(markdown_lines)
+
+#     return receipt_data, markdown_text
+
 import re
-from typing import List, Dict, Tuple  # ensure this import is present once near the top of the file
+from typing import List, Dict, Tuple  # ensure this import appears only once near the top of the file
 
 
 def parse_receipt_text(full_text: str) -> Tuple[Dict, str]:
@@ -458,84 +590,90 @@ def parse_receipt_text(full_text: str) -> Tuple[Dict, str]:
     Convert OCR text from Fluffy Café receipts into structured data + markdown.
     """
     text = (full_text or "").replace("\r", "")
-    text_lower = text.lower()
-    text_compact = re.sub(r"\s+", " ", text).strip()
+    lines = [line.strip() for line in text.splitlines() if line.strip()]
+    lines_lower = [line.lower() for line in lines]
 
     # Store name
-    store_match = re.search(r"(Fluffy\s+Cafe-?Restaur[a-z]*)", text, re.IGNORECASE)
-    store_name = store_match.group(1).strip() if store_match else None
+    store_name = next((line for line in lines if re.search(r"fluffy\s+cafe", line, re.IGNORECASE)), None)
 
     # Order device / employee number (e.g. "iPad1/696233-Merve")
-    terminal_match = re.search(r"([A-Za-z][A-Za-z0-9]*)\s*/\s*([A-Za-z0-9\-]+)", text)
-    order_device = terminal_match.group(1) if terminal_match else None
-    employee_no = terminal_match.group(2) if terminal_match else None
+    terminal_line = next((line for line in lines if "/" in line and "statement" not in line.lower()), None)
+    order_device = None
+    employee_no = None
+    if terminal_line:
+        terminal_match = re.search(r"([A-Za-z][A-Za-z0-9]*)\s*/\s*([A-Za-z0-9\-]+)", terminal_line)
+        if terminal_match:
+            order_device = terminal_match.group(1)
+            employee_no = terminal_match.group(2)
 
     # Statement number (e.g. "Statement N939388.21511")
-    statement_match = re.search(r"Statement\s+([A-Z0-9.\-]+)", text, re.IGNORECASE)
-    statement_number = statement_match.group(1) if statement_match else None
+    statement_line = next((line for line in lines if line.lower().startswith("statement")), None)
+    statement_number = None
+    if statement_line:
+        statement_match = re.search(r"Statement\s+([A-Z0-9.\-]+)", statement_line, re.IGNORECASE)
+        if statement_match:
+            statement_number = statement_match.group(1)
 
     # Date / time
-    datetime_match = re.search(r"(\d{2}/\d{2}/\d{4}),\s*(\d{2}:\d{2})", text)
+    datetime_line = next((line for line in lines if re.search(r"\d{2}/\d{2}/\d{4}", line)), "")
+    datetime_match = re.search(r"(\d{2}/\d{2}/\d{4}),\s*(\d{2}:\d{2})", datetime_line)
     date = datetime_match.group(1) if datetime_match else ""
     time = datetime_match.group(2) if datetime_match else ""
 
     # Table number (only the numeric part)
-    table_match = re.search(r"(?:Tafel|Table)\s+(\d+)", text, re.IGNORECASE)
-    table = table_match.group(1) if table_match else None
-    table_end_idx = table_match.end() if table_match else 0
+    table_idx = next((idx for idx, line in enumerate(lines) if re.search(r"(?:Tafel|Table)\s+\d+", line, re.IGNORECASE)), -1)
+    table = None
+    if table_idx != -1:
+        table_match = re.search(r"(?:Tafel|Table)\s+(\d+)", lines[table_idx], re.IGNORECASE)
+        if table_match:
+            table = table_match.group(1)
 
-    # Segment containing menu items (between table info and "Amount …")
-    amount_due_idx = text_lower.find("amount due")
-    if amount_due_idx == -1:
-        amount_due_idx = text_lower.find("amount")
-    if amount_due_idx == -1:
-        amount_due_idx = len(text)
+    # Find "Amount" line to delimit the items block
+    amount_idx = next((idx for idx, line in enumerate(lines_lower) if line.startswith("amount")), len(lines))
 
-    items_section = text[table_end_idx:amount_due_idx] if table_end_idx < amount_due_idx else ""
-    items_section = re.sub(r"Floor plan[^,]*,\s*(?:Tafel|Table)\s+\d+", "", items_section, flags=re.IGNORECASE)
-    items_section = re.sub(r"\s+", " ", items_section).strip()
-
-    item_pattern = re.compile(r"[A-Z][\w'&-]*(?:\s+[A-Z][\w'&-]*)*")
-    raw_names = item_pattern.findall(items_section)
-    blacklist = {"", "Floor", "Plan"}
-    item_names: List[str] = []
-    for candidate in raw_names:
-        if candidate in blacklist or candidate.lower().startswith("floor plan"):
-            continue
-        if candidate not in item_names:
-            item_names.append(candidate.strip())
-
-    # Monetary values (prefer region after “Btw” before the € total)
-    euro_idx = text.find("€")
-    price_region_start = text_lower.find("btw")
-    if price_region_start == -1:
-        price_region_start = amount_due_idx
-    price_region = text[price_region_start:euro_idx] if euro_idx > price_region_start >= 0 else text[price_region_start:]
-    price_values = re.findall(r"\d+[.,]\d{2}", price_region)
-
-    if item_names and len(price_values) < len(item_names):
-        # Fallback: grab trailing monetary values from entire text
-        price_values = re.findall(r"\d+[.,]\d{2}", text)
-    if item_names and len(price_values) >= len(item_names):
-        price_values = price_values[-len(item_names):]
-
-    item_prices = [float(v.replace(",", ".")) for v in price_values[:len(item_names)]]
-    while len(item_prices) < len(item_names):
-        item_prices.append(None)
+    # Extract item lines between table info and "Amount …"
+    items_block_lines = lines[table_idx + 1:amount_idx] if table_idx != -1 else lines[:amount_idx]
 
     items: List[Dict] = []
-    for idx, name in enumerate(item_names):
-        price = item_prices[idx] if idx < len(item_prices) else None
-        items.append({"name": name, "price": price})
+    pending_name: str | None = None
 
-    # Total amount from the € line
-    total_match = re.search(r"€\s*([\d.,]+)", text)
+    for raw_line in items_block_lines:
+        line = raw_line.strip(":- ")
+        if not line or "plan" in line.lower():
+            continue
+
+        match_inline = re.match(r"(.+?)\s+(\d+[.,]\d{2})$", line)
+        if match_inline:
+            name = match_inline.group(1).strip()
+            price = float(match_inline.group(2).replace(",", "."))
+            items.append({"name": name, "price": price})
+            pending_name = None
+            continue
+
+        match_price_only = re.fullmatch(r"(\d+[.,]\d{2})", line)
+        if match_price_only and pending_name:
+            price = float(match_price_only.group(1).replace(",", "."))
+            items.append({"name": pending_name, "price": price})
+            pending_name = None
+            continue
+
+        # Otherwise treat as a name line; price may follow on next line
+        pending_name = line
+
+    # If a name was pending without a matched price, add it with price None
+    if pending_name:
+        items.append({"name": pending_name, "price": None})
+
+    # Total amount from the “€ …” line
+    total_line = next((line for line in lines if "€" in line), "")
+    total_match = re.search(r"€\s*([\d.,]+)", total_line)
     total_amount = float(total_match.group(1).replace(",", ".")) if total_match else (
-        round(sum(p for p in item_prices if p is not None), 2) if item_prices else None
+        round(sum(item["price"] for item in items if item["price"] is not None), 2) if items else None
     )
 
     # Tax ID
-    tax_match = re.search(r"Btw[: ]+([A-Z0-9]+)", text, re.IGNORECASE)
+    tax_line = next((line for line in lines if line.lower().startswith("btw")), "")
+    tax_match = re.search(r"Btw[: ]+([A-Z0-9]+)", tax_line, re.IGNORECASE)
     tax_id = tax_match.group(1) if tax_match else None
 
     receipt_data = {
@@ -551,7 +689,7 @@ def parse_receipt_text(full_text: str) -> Tuple[Dict, str]:
         "tax_id": tax_id,
     }
 
-    # Markdown view
+    # Markdown representation
     markdown_lines = [f"# {store_name or 'Fluffy Cafe-Restaurant'}", ""]
     if date or time:
         markdown_lines.append(f"**Date:** {date} {time}".strip())
@@ -559,13 +697,13 @@ def parse_receipt_text(full_text: str) -> Tuple[Dict, str]:
         markdown_lines.append(f"**Table:** {table}")
     if statement_number:
         markdown_lines.append(f"**Statement:** {statement_number}")
-    if order_device or employee_no:
-        metadata_parts = []
-        if order_device:
-            metadata_parts.append(f"Device: {order_device}")
-        if employee_no:
-            metadata_parts.append(f"Employee: {employee_no}")
-        markdown_lines.append("**Assignment:** " + " | ".join(metadata_parts))
+    assignments = []
+    if order_device:
+        assignments.append(f"Device: {order_device}")
+    if employee_no:
+        assignments.append(f"Employee: {employee_no}")
+    if assignments:
+        markdown_lines.append("**Assignment:** " + " | ".join(assignments))
     markdown_lines.append("\n---\n")
     markdown_lines.append("| Item | Price (€) |\n|------|-----------:|")
     for item in items:
@@ -580,7 +718,6 @@ def parse_receipt_text(full_text: str) -> Tuple[Dict, str]:
     markdown_text = "\n".join(markdown_lines)
 
     return receipt_data, markdown_text
-
 
 
 
