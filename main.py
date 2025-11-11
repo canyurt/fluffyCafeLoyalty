@@ -1374,8 +1374,10 @@ def parse_receipt_text(full_text: str) -> Tuple[Dict, str]:
     employee_no = terminal_match.group(2).strip() if terminal_match else None
 
     reference_match = re.search(r"([A-Za-z][A-Za-z0-9]*)\s*/\s*([A-Za-z0-9\-]+)\s+([A-Z]\d+[A-Z0-9.]*)", text)
+    print(f"reference_match: {reference_match}")
     reference_no = reference_match.group(3).strip() if reference_match else None
-
+    print(f"reference_no: {reference_no}")
+    
     statement_match = re.search(r"Statement\s+([A-Z0-9.\-]+)", text, re.IGNORECASE)
     statement_number = statement_match.group(1) if statement_match else None
 
