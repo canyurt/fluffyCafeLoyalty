@@ -2428,6 +2428,7 @@ def parse_receipt_text(full_text: str, response=None) -> Tuple[Dict, str]:
             for t in row_tokens
             if t.x >= price_column_x - 6 and re.fullmatch(r"\d+[.,]\d{2}", t.text)
         ]
+        print(f"price_candidates {price_candidates}")
         
         if not price_candidates:
             continue
