@@ -2266,12 +2266,27 @@ class OCRToken:
 
 #     return receipt_data, markdown_text
 
+from dataclasses import dataclass
+from typing import List, Dict, Optional, Tuple, Any
+import re
+import statistics
+import math
+from google.cloud import vision
+
+@dataclass
+class OCRToken:
+    text: str
+    x: float
+    y: float
+    width: float
+    height: float
+
 def parse_receipt_text(full_text: str, response=None) -> Tuple[Dict, str]:
     """
     Convert OCR text into structured data (schema) + markdown view.
-    Handles both single-price rows and rows that contain quantity + unit + total prices.
-    Requires the Vision `document_text_detection` response so we can use bounding boxes.
-    Includes print statements for debugging row grouping and price extraction.
+    Uses layout-based boundaries to extract items reliably:
+    - Items are ALWAYS between the table start line and amount boundary
+    - Uses bounding boxes for stable parsing regardless of item content changes
     """
     if response is None or not response.full_text_annotation.pages:
         raise ValueError("Vision response with layout required for stable parsing.")
@@ -2300,6 +2315,45 @@ def parse_receipt_text(full_text: str, response=None) -> Tuple[Dict, str]:
     print(f"[parse_receipt_text] total_tokens={len(tokens)}")
     tokens.sort(key=lambda t: (round(t.y / 6), t.x))
 
+    # ========== FIND STRUCTURAL BOUNDARIES ==========
+    
+    # Find the "Tafel"/"Table" row (marks START of item table)
+    table_start_y: Optional[float] = None
+    for idx, token in enumerate(tokens):
+        if token.text.lower() in ["tafel", "table"]:
+            table_start_y = token.y
+            # Get the center Y of this row for better boundary
+            row_tokens = [t for t in tokens if abs(t.y - token.y) <= 10]
+            table_start_y = statistics.mean(t.y + t.height / 2 for t in row_tokens)
+            print(f"[parse_receipt_text] table_start_y={table_start_y:.1f}")
+            break
+    
+    # Find the "Amount due" row (marks END of item table)
+    amount_boundary: Optional[float] = None
+    for idx, token in enumerate(tokens):
+        if "amount" in token.text.lower() and "due" in tokens[idx+1].text.lower() if idx+1 < len(tokens) else False:
+            row_tokens = [t for t in tokens if abs(t.y - token.y) <= 10]
+            amount_boundary = min(t.y for t in row_tokens)  # Top of "Amount due" row
+            print(f"[parse_receipt_text] amount_boundary={amount_boundary:.1f}")
+            break
+    
+    if amount_boundary is None:
+        # Fallback: look for any "amount" keyword
+        for token in tokens:
+            if "amount" in token.text.lower():
+                amount_boundary = token.y
+                print(f"[parse_receipt_text] amount_boundary (fallback)={amount_boundary:.1f}")
+                break
+    
+    if table_start_y is None:
+        table_start_y = 0.0
+    if amount_boundary is None:
+        amount_boundary = float("inf")
+    
+    print(f"[parse_receipt_text] item_zone: y=[{table_start_y:.1f}, {amount_boundary:.1f}]")
+
+    # ========== CLUSTER TOKENS INTO ROWS ==========
+    
     row_clusters: List[List[OCRToken]] = []
     for token in tokens:
         placed = False
@@ -2319,40 +2373,29 @@ def parse_receipt_text(full_text: str, response=None) -> Tuple[Dict, str]:
         cluster.sort(key=lambda t: t.x)
         center_y = statistics.mean(t.y + t.height / 2 for t in cluster)
         rows.append({"tokens": cluster, "center_y": center_y})
-    print(f"[parse_receipt_text] row_count={len(rows)}")
+    
+    print(f"[parse_receipt_text] total_row_count={len(rows)}")
 
-    table_baseline: Optional[float] = None
-    amount_row_y: Optional[float] = None
-    for idx, row in enumerate(rows):
-        row_text = " ".join(tok.text for tok in row["tokens"]).lower()
-        if table_baseline is None and ("tafel" in row_text or "table" in row_text):
-            table_baseline = row["center_y"]
-            print(f"[parse_receipt_text] table_baseline_row={idx} y={table_baseline}")
-        if amount_row_y is None and "amount" in row_text:
-            amount_row_y = row["center_y"]
-            print(f"[parse_receipt_text] amount_row_y_row={idx} y={amount_row_y}")
-        if table_baseline is not None and amount_row_y is not None:
-            break
-    if table_baseline is None:
-        table_baseline = 0.0
-    amount_boundary = amount_row_y if amount_row_y is not None else float("inf")
-
+    # ========== IDENTIFY PRICE COLUMNS ==========
+    
     price_regex = re.compile(r"\d+[.,]\d{2}")
-    price_tokens = [
-        t
-        for t in tokens
+    
+    # Find price tokens ONLY in the item zone
+    price_tokens_in_zone = [
+        t for t in tokens
         if price_regex.fullmatch(t.text)
-        and (table_baseline <= (t.y + t.height / 2) < amount_boundary)
+        and (table_start_y <= (t.y + t.height / 2) < amount_boundary)
     ]
-    print(f"[parse_receipt_text] price_token_count={len(price_tokens)}")
-    if not price_tokens:
-        price_tokens = [t for t in tokens if price_regex.fullmatch(t.text)]
-    if not price_tokens:
-        raise ValueError("No price tokens detected in layout; cannot build item list.")
-
+    
+    if not price_tokens_in_zone:
+        raise ValueError(f"No price tokens found in item zone [{table_start_y:.1f}, {amount_boundary:.1f}]")
+    
+    print(f"[parse_receipt_text] price_tokens_in_zone={len(price_tokens_in_zone)}")
+    
+    # Cluster price tokens by X position (vertical columns)
     column_tolerance = 14.0
     column_clusters: List[Dict[str, float]] = []
-    for tok in price_tokens:
+    for tok in price_tokens_in_zone:
         center = tok.x + tok.width / 2
         assigned = False
         for cluster in column_clusters:
@@ -2364,11 +2407,15 @@ def parse_receipt_text(full_text: str, response=None) -> Tuple[Dict, str]:
                 break
         if not assigned:
             column_clusters.append({"center": center, "sum": center, "count": 1})
+    
     price_columns = sorted(cluster["center"] for cluster in column_clusters)
     print(f"[parse_receipt_text] price_columns={price_columns}")
+    
     unit_col_index = 0
     total_col_index = len(price_columns) - 1
 
+    # ========== EXTRACT HEADER METADATA ==========
+    
     text = full_text.replace("\r", "")
     store_match = re.search(r"(Fluffy\s+Cafe-?Restaur[a-z]*)", text, re.IGNORECASE)
     store_name = (
@@ -2376,6 +2423,7 @@ def parse_receipt_text(full_text: str, response=None) -> Tuple[Dict, str]:
         if store_match
         else "Fluffy Cafe-Restaurant"
     )
+    
     terminal_match = re.search(r"([A-Za-z][A-Za-z0-9]*)\s*/\s*([A-Za-z0-9\-]+)", text)
     order_device = terminal_match.group(1) if terminal_match else None
     employee_no = terminal_match.group(2) if terminal_match else None
@@ -2414,13 +2462,18 @@ def parse_receipt_text(full_text: str, response=None) -> Tuple[Dict, str]:
     time_match = re.search(r"\d{2}:\d{2}", text)
     date = date_match.group(1) if date_match else ""
     time = time_match.group(0) if time_match else ""
-    table_match = re.search(r"(?:Tafel|Table)\s*(\d+)", text, re.IGNORECASE)
+    
+    table_match = re.search(r"(?:Tafel|Table)\s+(\d+)", text, re.IGNORECASE)
     table = table_match.group(1) if table_match else None
+    
     total_match = re.search(r"€\s*([\d.,]+)", text)
     total_amount = float(total_match.group(1).replace(",", ".")) if total_match else None
+    
     tax_match = re.search(r"Btw[: ]+([A-Z0-9]+)", text, re.IGNORECASE)
     tax_id = tax_match.group(1) if tax_match else None
 
+    # ========== EXTRACT ITEMS FROM BOUNDED ZONE ==========
+    
     non_item_keywords = {
         "amount",
         "draft",
@@ -2438,7 +2491,7 @@ def parse_receipt_text(full_text: str, response=None) -> Tuple[Dict, str]:
         "device",
         "employee",
         "table",
-        "taf",
+        "tafel",
         "thank",
         "visit",
         "no payment",
@@ -2448,17 +2501,21 @@ def parse_receipt_text(full_text: str, response=None) -> Tuple[Dict, str]:
 
     skip_next_row = False
     items: List[Dict[str, Any]] = []
+    
     for idx, row in enumerate(rows):
-        row_text = " ".join(tok.text for tok in row["tokens"])
         center_y = row["center_y"]
-        print(f"[parse_receipt_text] row_index={idx} center_y={center_y:.1f} text='{row_text}'")
-
-        if center_y <= table_baseline:
-            print(f"[parse_receipt_text] skip_before_table row_index={idx}")
+        row_text = " ".join(tok.text for tok in row["tokens"])
+        
+        # ===== BOUNDARY CHECKS: Only process rows in item zone =====
+        if center_y <= table_start_y:
+            print(f"[parse_receipt_text] skip_before_table row_index={idx} y={center_y:.1f}")
             continue
         if center_y >= amount_boundary:
-            print(f"[parse_receipt_text] stop_at_amount row_index={idx}")
-            continue
+            print(f"[parse_receipt_text] stop_at_amount row_index={idx} y={center_y:.1f}")
+            break  # Stop processing further rows
+        
+        print(f"[parse_receipt_text] row_index={idx} y={center_y:.1f} text='{row_text}'")
+        
         if skip_next_row:
             print(f"[parse_receipt_text] skip_due_to_hint row_index={idx}")
             skip_next_row = False
@@ -2466,12 +2523,14 @@ def parse_receipt_text(full_text: str, response=None) -> Tuple[Dict, str]:
 
         row_text_lower = row_text.lower()
         if "hint" in row_text_lower:
-            print(f"[parse_receipt_text] found_hint row_index={idx}")
+            print(f"[parse_receipt_text] found_hint row_index={idx}, skipping next row")
             skip_next_row = True
             continue
 
+        # ===== EXTRACT PRICES FROM THIS ROW =====
         row_tokens = row["tokens"]
         row_price_tokens: List[Tuple[OCRToken, float, Optional[int]]] = []
+        
         for tok in row_tokens:
             if price_regex.fullmatch(tok.text):
                 center_x = tok.x + tok.width / 2
@@ -2483,22 +2542,24 @@ def parse_receipt_text(full_text: str, response=None) -> Tuple[Dict, str]:
                 col_idx = nearest_idx if distance <= column_tolerance else None
                 value = float(tok.text.replace(",", "."))
                 row_price_tokens.append((tok, value, col_idx))
-        print(f"[parse_receipt_text] row_index={idx} price_tokens={[(t.text, col_idx) for t, _, col_idx in row_price_tokens]}")
-
+        
         if not row_price_tokens:
+            print(f"[parse_receipt_text] row_index={idx} no_prices, skipping")
             continue
 
+        # ===== EXTRACT ITEM NAME AND QUANTITY =====
         left_tokens = [
-            tok
-            for tok in row_tokens
+            tok for tok in row_tokens
             if not price_regex.fullmatch(tok.text) and tok.text != "€"
         ]
+        
         if not left_tokens:
             print(f"[parse_receipt_text] row_index={idx} no_left_tokens")
             continue
 
         name_tokens: List[str] = []
         quantity: Optional[int] = None
+        
         for tok in left_tokens:
             cleaned = tok.text.strip()
             if not cleaned:
@@ -2510,22 +2571,23 @@ def parse_receipt_text(full_text: str, response=None) -> Tuple[Dict, str]:
                     print(f"[parse_receipt_text] row_index={idx} quantity={quantity}")
                     continue
             name_tokens.append(cleaned)
-        print(f"[parse_receipt_text] row_index={idx} name_tokens={name_tokens}")
 
         if not name_tokens:
+            print(f"[parse_receipt_text] row_index={idx} no_name_tokens")
             continue
 
         name = " ".join(name_tokens).strip(" :-")
         name_lower = name.lower()
+        
         if len(name) < 2 or not re.search(r"[a-z]", name_lower):
+            print(f"[parse_receipt_text] row_index={idx} invalid_name='{name}'")
             continue
+        
         if any(keyword in name_lower for keyword in non_item_keywords):
-            print(f"[parse_receipt_text] row_index={idx} filtered_by_keyword name='{name}'")
+            print(f"[parse_receipt_text] row_index={idx} filtered_by_keyword='{name}'")
             continue
 
-        unit_price: Optional[float] = None
-        total_price: Optional[float] = None
-
+        # ===== ASSIGN PRICES TO COLUMNS =====
         totals_in_row = [
             value for _, value, col_idx in row_price_tokens if col_idx == total_col_index
         ]
@@ -2535,7 +2597,11 @@ def parse_receipt_text(full_text: str, response=None) -> Tuple[Dict, str]:
         unclassified = [
             value for _, value, col_idx in row_price_tokens if col_idx is None
         ]
-        print(f"[parse_receipt_text] row_index={idx} units={units_in_row} totals={totals_in_row} unclassified={unclassified}")
+        
+        print(f"[parse_receipt_text] row_index={idx} units={units_in_row} totals={totals_in_row}")
+
+        unit_price: Optional[float] = None
+        total_price: Optional[float] = None
 
         if len(price_columns) == 1:
             total_price = row_price_tokens[-1][1]
@@ -2548,15 +2614,17 @@ def parse_receipt_text(full_text: str, response=None) -> Tuple[Dict, str]:
                 total_price = unclassified[-1]
             else:
                 total_price = row_price_tokens[-1][1]
+            
             if units_in_row:
                 unit_price = units_in_row[0]
             elif quantity and quantity > 0:
                 unit_price = round(total_price / quantity, 2)
 
         if total_price is None:
-            print(f"[parse_receipt_text] row_index={idx} missing_total_price")
+            print(f"[parse_receipt_text] row_index={idx} no_total_price")
             continue
 
+        # ===== CREATE ITEM ENTRY =====
         item_entry: Dict[str, Any] = {"name": name, "price": round(total_price, 2)}
         if quantity is not None:
             item_entry["quantity"] = quantity
@@ -2565,16 +2633,19 @@ def parse_receipt_text(full_text: str, response=None) -> Tuple[Dict, str]:
             if not math.isclose(unit_price_rounded, item_entry["price"], rel_tol=1e-9):
                 item_entry["unit_price"] = unit_price_rounded
 
-        print(f"[parse_receipt_text] row_index={idx} item_entry={item_entry}")
+        print(f"[parse_receipt_text] row_index={idx} ADDED item={item_entry}")
         items.append(item_entry)
 
     print(f"[parse_receipt_text] final_item_count={len(items)}")
 
+    # ===== FALLBACK: Sum items if total not found =====
     if total_amount is None and items:
         totals = [item["price"] for item in items if item.get("price") is not None]
         if totals:
             total_amount = round(sum(totals), 2)
 
+    # ========== BUILD STRUCTURED DATA ==========
+    
     receipt_data = {
         "store_name": store_name,
         "statement_no": statement_no,
@@ -2589,7 +2660,10 @@ def parse_receipt_text(full_text: str, response=None) -> Tuple[Dict, str]:
         "tax_id": tax_id,
     }
 
+    # ========== BUILD MARKDOWN VIEW ==========
+    
     markdown_lines = [f"# {store_name}", ""]
+    
     if date or time:
         markdown_lines.append(f"**Date:** {date} {time}".strip())
     if table:
@@ -2598,6 +2672,7 @@ def parse_receipt_text(full_text: str, response=None) -> Tuple[Dict, str]:
         markdown_lines.append(f"**Statement:** {statement_no}")
     if reference_no:
         markdown_lines.append(f"**Reference:** {reference_no}")
+    
     assignment_parts = []
     if order_device:
         assignment_parts.append(f"Device: {order_device}")
@@ -2605,6 +2680,7 @@ def parse_receipt_text(full_text: str, response=None) -> Tuple[Dict, str]:
         assignment_parts.append(f"Employee: {employee_no}")
     if assignment_parts:
         markdown_lines.append("**Assignment:** " + " | ".join(assignment_parts))
+    
     markdown_lines.append("\n---\n")
 
     has_quantities = any("quantity" in item for item in items)
@@ -2647,6 +2723,7 @@ def parse_receipt_text(full_text: str, response=None) -> Tuple[Dict, str]:
     markdown_lines.append("")
     if tax_id:
         markdown_lines.append(f"**Tax ID:** {tax_id}")
+    
     markdown_text = "\n".join(markdown_lines)
 
     return receipt_data, markdown_text
