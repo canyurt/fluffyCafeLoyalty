@@ -8,6 +8,7 @@ import os
 import uuid
 from datetime import datetime
 from typing import Optional
+import statistics
 
 import firebase_admin
 from firebase_admin import auth as firebase_auth, credentials, firestore
