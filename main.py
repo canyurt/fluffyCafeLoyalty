@@ -236,6 +236,7 @@ async def upload_receipt_endpoint(
             
             # Run Vision API OCR
             gcs_uri = f"gs://{settings.storage_receipts_bucket}/{object_name}"
+            print(f"gcs_uri:{gcs_uri}")
             image = vision.Image()
             image.source.image_uri = gcs_uri
             # response = vision_client.text_detection(image=image)
