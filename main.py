@@ -1683,7 +1683,7 @@ async def upload_receipt_endpoint(
 #     return receipt_data, markdown_text
 
 import re
-from typing import Any, List, Tuple, Dict  # ensure Optional already imported elsewhere
+from typing import Any, List, Tuple, Dict, Optional
 from dataclasses import dataclass
 
 @dataclass
@@ -1693,6 +1693,166 @@ class OCRToken:
     y: float
     width: float
     height: float
+
+# def parse_receipt_text(full_text: str, response=None) -> Tuple[Dict, str]:
+#     """
+#     Convert OCR text into structured data (schema) + markdown view.
+#     Requires the Vision `document_text_detection` response so we can use bounding boxes.
+#     """
+#     if response is None or not response.full_text_annotation.pages:
+#         raise ValueError("Vision response with layout required for stable parsing.")
+
+#     page = response.full_text_annotation.pages[0]
+
+#     def token_stream():
+#         for block in page.blocks:
+#             for paragraph in block.paragraphs:
+#                 for word in paragraph.words:
+#                     word_text = "".join(symbol.text for symbol in word.symbols)
+#                     vertices = word.bounding_box.vertices
+#                     xs = [v.x for v in vertices]
+#                     ys = [v.y for v in vertices]
+#                     x_min, x_max = min(xs), max(xs)
+#                     y_min, y_max = min(ys), max(ys)
+#                     yield OCRToken(
+#                         text=word_text,
+#                         x=x_min,
+#                         y=y_min,
+#                         width=x_max - x_min,
+#                         height=y_max - y_min,
+#                     )
+
+#     tokens: List[OCRToken] = list(token_stream())
+#     tokens.sort(key=lambda t: (round(t.y / 6), t.x))  # cluster by approximate line height
+
+#     # 1. Recover metadata using the safest fields from `full_text`.
+#     text = full_text.replace("\r", "")
+#     store_match = re.search(r"(Fluffy\s+Cafe-?Restaur[a-z]*)", text, re.IGNORECASE)
+#     store_name = (
+#         re.sub(r"\s+", " ", store_match.group(1)).strip()
+#         if store_match
+#         else "Fluffy Cafe-Restaurant"
+#     )
+#     terminal_match = re.search(r"([A-Za-z][A-Za-z0-9]*)\s*/\s*([A-Za-z0-9\-]+)", text)
+#     order_device = terminal_match.group(1) if terminal_match else None
+#     employee_no = terminal_match.group(2) if terminal_match else None
+#     statement_match = re.search(r"Statement\s+([A-Z0-9.\-]+)", text, re.IGNORECASE)
+#     statement_number = statement_match.group(1) if statement_match else None
+#     date_match = re.search(r"(\d{2}/\d{2}/\d{4})", text)
+#     time_match = re.search(r"\d{2}:\d{2}", text)
+#     date = date_match.group(1) if date_match else ""
+#     time = time_match.group(0) if time_match else ""
+#     table_match = re.search(r"(?:Tafel|Table)\s*(\d+)", text, re.IGNORECASE)
+#     table = table_match.group(1) if table_match else None
+#     total_match = re.search(r"€\s*([\d.,]+)", text)
+#     total_amount = float(total_match.group(1).replace(",", ".")) if total_match else None
+#     tax_match = re.search(r"Btw[: ]+([A-Z0-9]+)", text, re.IGNORECASE)
+#     tax_id = tax_match.group(1) if tax_match else None
+
+#     # 2. Determine horizontal split (names vs prices) by median X of euro prices.
+#     price_tokens = [t for t in tokens if re.fullmatch(r"\d+[.,]\d{2}", t.text)]
+#     if not price_tokens:
+#         raise ValueError("No price tokens detected in layout; cannot build item list.")
+
+#     price_column_x = statistics.median(t.x for t in price_tokens)
+#     row_clusters: List[List[OCRToken]] = []
+
+#     for token in tokens:
+#         assigned = False
+#         for row in row_clusters:
+#             if abs(row[0].y - token.y) <= max(row[0].height, token.height) * 0.6:
+#                 row.append(token)
+#                 assigned = True
+#                 break
+#         if not assigned:
+#             row_clusters.append([token])
+
+#     items: List[Dict[str, Optional[float]]] = []
+#     for row in row_clusters:
+#         row.sort(key=lambda t: t.x)
+#         left_words = [t.text for t in row if t.x + t.width < price_column_x]
+#         right_prices = [t.text for t in row if t.x >= price_column_x or t.text == "€"]
+
+#         if not left_words:
+#             continue
+
+#         possible_price = None
+#         for candidate in reversed(right_prices):
+#             if re.fullmatch(r"\d+[.,]\d{2}", candidate):
+#                 possible_price = float(candidate.replace(",", "."))
+#                 break
+
+#         name = " ".join(left_words).strip(" :-")
+#         if any(k in name.lower() for k in ("floor plan", "amount due", "division hint")):
+#             continue
+
+#         items.append({"name": name, "price": possible_price})
+
+#     # 3. Keep only meaningful rows: at least two characters, price or subsequent price.
+#     filtered: List[Dict[str, Optional[float]]] = []
+#     for item in items:
+#         if len(item["name"]) < 2:
+#             continue
+#         filtered.append(item)
+#     items = filtered
+
+#     # 4. Fall back: if a row has no price, look for the next price-only row.
+#     for idx, item in enumerate(items):
+#         if item["price"] is None:
+#             for future in items[idx + 1:]:
+#                 if future["price"] is not None and future["name"] == "":
+#                     item["price"] = future["price"]
+#                     future["price"] = None
+#                     break
+
+#     # 5. Remove empty placeholder rows produced by previous step.
+#     items = [item for item in items if item["name"]]
+
+#     # 6. Recompute total if missing.
+#     if total_amount is None and items:
+#         prices = [item["price"] for item in items if item["price"] is not None]
+#         total_amount = round(sum(prices), 2) if prices else None
+
+#     receipt_data = {
+#         "store_name": store_name,
+#         "statement_number": statement_number,
+#         "order_device": order_device,
+#         "employee_no": employee_no,
+#         "date": date,
+#         "time": time,
+#         "table": table,
+#         "items": items,
+#         "total_amount": total_amount,
+#         "tax_id": tax_id,
+#     }
+
+#     markdown_lines = [f"# {store_name}", ""]
+#     if date or time:
+#         markdown_lines.append(f"**Date:** {date} {time}".strip())
+#     if table:
+#         markdown_lines.append(f"**Table:** {table}")
+#     if statement_number:
+#         markdown_lines.append(f"**Statement:** {statement_number}")
+#     assignment_parts = []
+#     if order_device:
+#         assignment_parts.append(f"Device: {order_device}")
+#     if employee_no:
+#         assignment_parts.append(f"Employee: {employee_no}")
+#     if assignment_parts:
+#         markdown_lines.append("**Assignment:** " + " | ".join(assignment_parts))
+#     markdown_lines.append("\n---\n")
+#     markdown_lines.append("| Item | Price (€) |\n|------|-----------:|")
+#     for item in items:
+#         price_text = f"{item['price']:.2f}" if item["price"] is not None else ""
+#         markdown_lines.append(f"| {item['name']} | {price_text} |")
+#     if total_amount is not None:
+#         markdown_lines.append(f"| **Total** | **{total_amount:.2f}** |")
+#     markdown_lines.append("")
+#     if tax_id:
+#         markdown_lines.append(f"**Tax ID:** {tax_id}")
+
+#     markdown_text = "\n".join(markdown_lines)
+#     return receipt_data, markdown_text
 
 def parse_receipt_text(full_text: str, response=None) -> Tuple[Dict, str]:
     """
@@ -1723,9 +1883,41 @@ def parse_receipt_text(full_text: str, response=None) -> Tuple[Dict, str]:
                     )
 
     tokens: List[OCRToken] = list(token_stream())
-    tokens.sort(key=lambda t: (round(t.y / 6), t.x))  # cluster by approximate line height
+    tokens.sort(key=lambda t: (round(t.y / 6), t.x))
 
-    # 1. Recover metadata using the safest fields from `full_text`.
+    table_baseline: Optional[float] = None
+    for token in tokens:
+        if token.text.lower() in {"tafel", "table"}:
+            table_baseline = token.y + token.height / 2
+            break
+
+    price_tokens = [t for t in tokens if re.fullmatch(r"\d+[.,]\d{2}", t.text)]
+    if not price_tokens:
+        raise ValueError("No price tokens detected in layout; cannot build item list.")
+
+    price_column_x = statistics.median(t.x for t in price_tokens)
+    max_price_center_y = max(t.y + t.height / 2 for t in price_tokens)
+
+    row_clusters: List[List[OCRToken]] = []
+    for token in tokens:
+        placed = False
+        for cluster in row_clusters:
+            anchor = cluster[0]
+            anchor_center = anchor.y + anchor.height / 2
+            token_center = token.y + token.height / 2
+            if abs(anchor_center - token_center) <= max(anchor.height, token.height) * 0.6:
+                cluster.append(token)
+                placed = True
+                break
+        if not placed:
+            row_clusters.append([token])
+
+    rows: List[Dict[str, Any]] = []
+    for cluster in row_clusters:
+        cluster.sort(key=lambda t: t.x)
+        center_y = statistics.mean(t.y + t.height / 2 for t in cluster)
+        rows.append({"tokens": cluster, "center_y": center_y})
+
     text = full_text.replace("\r", "")
     store_match = re.search(r"(Fluffy\s+Cafe-?Restaur[a-z]*)", text, re.IGNORECASE)
     store_name = (
@@ -1749,66 +1941,63 @@ def parse_receipt_text(full_text: str, response=None) -> Tuple[Dict, str]:
     tax_match = re.search(r"Btw[: ]+([A-Z0-9]+)", text, re.IGNORECASE)
     tax_id = tax_match.group(1) if tax_match else None
 
-    # 2. Determine horizontal split (names vs prices) by median X of euro prices.
-    price_tokens = [t for t in tokens if re.fullmatch(r"\d+[.,]\d{2}", t.text)]
-    if not price_tokens:
-        raise ValueError("No price tokens detected in layout; cannot build item list.")
-
-    price_column_x = statistics.median(t.x for t in price_tokens)
-    row_clusters: List[List[OCRToken]] = []
-
-    for token in tokens:
-        assigned = False
-        for row in row_clusters:
-            if abs(row[0].y - token.y) <= max(row[0].height, token.height) * 0.6:
-                row.append(token)
-                assigned = True
-                break
-        if not assigned:
-            row_clusters.append([token])
+    non_item_keywords = {
+        "amount",
+        "draft",
+        "receipt",
+        "floor plan",
+        "division",
+        "payment",
+        "btw",
+        "tax",
+        "dank",
+        "lightspeed",
+        "amstelveen",
+        "statement",
+        "device",
+        "employee",
+        "table",
+        "taf",
+        "thank",
+        "visit",
+        "no payment",
+        "hint",
+        "nl",
+    }
 
     items: List[Dict[str, Optional[float]]] = []
-    for row in row_clusters:
-        row.sort(key=lambda t: t.x)
-        left_words = [t.text for t in row if t.x + t.width < price_column_x]
-        right_prices = [t.text for t in row if t.x >= price_column_x or t.text == "€"]
+    for row in rows:
+        center_y = row["center_y"]
+        if table_baseline is not None and center_y <= table_baseline:
+            continue
+        if center_y >= max_price_center_y + 18:
+            continue
 
+        row_tokens = row["tokens"]
+        cutoff = price_column_x - 4
+        left_words = [t.text for t in row_tokens if t.x + t.width <= cutoff]
         if not left_words:
             continue
 
         possible_price = None
-        for candidate in reversed(right_prices):
-            if re.fullmatch(r"\d+[.,]\d{2}", candidate):
-                possible_price = float(candidate.replace(",", "."))
+        for candidate in reversed(row_tokens):
+            if candidate.x >= price_column_x - 6 and re.fullmatch(r"\d+[.,]\d{2}", candidate.text):
+                possible_price = float(candidate.text.replace(",", "."))
                 break
+        if possible_price is None:
+            continue
 
         name = " ".join(left_words).strip(" :-")
-        if any(k in name.lower() for k in ("floor plan", "amount due", "division hint")):
+        name_lower = name.lower()
+        if len(name) < 2:
+            continue
+        if not re.search(r"[a-z]", name_lower):
+            continue
+        if any(keyword in name_lower for keyword in non_item_keywords):
             continue
 
-        items.append({"name": name, "price": possible_price})
+        items.append({"name": name, "price": round(possible_price, 2)})
 
-    # 3. Keep only meaningful rows: at least two characters, price or subsequent price.
-    filtered: List[Dict[str, Optional[float]]] = []
-    for item in items:
-        if len(item["name"]) < 2:
-            continue
-        filtered.append(item)
-    items = filtered
-
-    # 4. Fall back: if a row has no price, look for the next price-only row.
-    for idx, item in enumerate(items):
-        if item["price"] is None:
-            for future in items[idx + 1:]:
-                if future["price"] is not None and future["name"] == "":
-                    item["price"] = future["price"]
-                    future["price"] = None
-                    break
-
-    # 5. Remove empty placeholder rows produced by previous step.
-    items = [item for item in items if item["name"]]
-
-    # 6. Recompute total if missing.
     if total_amount is None and items:
         prices = [item["price"] for item in items if item["price"] is not None]
         total_amount = round(sum(prices), 2) if prices else None
@@ -1850,10 +2039,9 @@ def parse_receipt_text(full_text: str, response=None) -> Tuple[Dict, str]:
     markdown_lines.append("")
     if tax_id:
         markdown_lines.append(f"**Tax ID:** {tax_id}")
-
     markdown_text = "\n".join(markdown_lines)
-    return receipt_data, markdown_text
 
+    return receipt_data, markdown_text
 
 
 
