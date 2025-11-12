@@ -2270,6 +2270,7 @@ def parse_receipt_text(full_text: str, response=None) -> Tuple[Dict, str]:
     """
     Convert OCR text into structured data (schema) + markdown view.
     Requires the Vision `document_text_detection` response so we can use bounding boxes.
+    Handles single-price rows and rows that include quantity + unit + total prices.
     """
     if response is None or not response.full_text_annotation.pages:
         raise ValueError("Vision response with layout required for stable parsing.")
@@ -2321,39 +2322,6 @@ def parse_receipt_text(full_text: str, response=None) -> Tuple[Dict, str]:
         raise ValueError("No price tokens detected; unable to parse items.")
 
     max_price_center_y = max(t.y + t.height / 2 for t in item_price_tokens)
-
-    column_tolerance = 12.0
-    column_accumulators: List[Dict[str, float]] = []
-    for tok in item_price_tokens:
-        center_x = tok.x + tok.width / 2
-        assigned = False
-        for col in column_accumulators:
-            if abs(col["center"] - center_x) <= column_tolerance:
-                col["sum"] += center_x
-                col["count"] += 1
-                col["center"] = col["sum"] / col["count"]
-                assigned = True
-                break
-        if not assigned:
-            column_accumulators.append(
-                {"center": center_x, "sum": center_x, "count": 1}
-            )
-
-    price_columns = sorted(col["center"] for col in column_accumulators)
-    if len(price_columns) > 2:
-        price_columns = price_columns[-2:]
-    if not price_columns:
-        raise ValueError("Unable to determine price columns from OCR tokens.")
-
-    unit_col_index = 0
-    total_col_index = len(price_columns) - 1
-    name_boundary_x = price_columns[0] - 8
-
-    def closest_column(center_x: float) -> int:
-        return min(
-            range(len(price_columns)),
-            key=lambda idx: abs(price_columns[idx] - center_x),
-        )
 
     row_clusters: List[List[OCRToken]] = []
     for token in tokens:
@@ -2459,65 +2427,49 @@ def parse_receipt_text(full_text: str, response=None) -> Tuple[Dict, str]:
         if center_y >= max_price_center_y + 18:
             continue
 
-        row_tokens = row["tokens"]
-        row_price_tokens = []
-        for candidate in row_tokens:
-            if price_regex.fullmatch(candidate.text):
-                column_idx = closest_column(candidate.x + candidate.width / 2)
-                row_price_tokens.append((candidate, column_idx))
-        if not row_price_tokens:
+        row_tokens_sorted = list(row["tokens"])
+        price_values: List[float] = []
+        while row_tokens_sorted and price_regex.fullmatch(row_tokens_sorted[-1].text):
+            price_token = row_tokens_sorted.pop()
+            price_values.append(float(price_token.text.replace(",", ".")))
+        price_values.reverse()
+
+        if not price_values:
             continue
 
-        left_tokens = [
-            t
-            for t in row_tokens
-            if (t.x + t.width / 2) < name_boundary_x
-            and not price_regex.fullmatch(t.text)
-            and t.text != "€"
-        ]
-        if not left_tokens:
+        # Remaining tokens hold quantity + item name (in reading order)
+        if not row_tokens_sorted:
             continue
 
         quantity: Optional[int] = None
-        if re.fullmatch(r"\d+(?:x)?", left_tokens[0].text):
-            qty_match = re.match(r"\d+", left_tokens[0].text)
-            if qty_match:
-                quantity = int(qty_match.group())
-                left_tokens = left_tokens[1:]
+        first_token_text = row_tokens_sorted[0].text
+        qty_match = re.fullmatch(r"(\d+)(?:x)?", first_token_text)
+        if qty_match:
+            quantity = int(qty_match.group(1))
+            row_tokens_sorted = row_tokens_sorted[1:]
+            if not row_tokens_sorted:
+                continue
 
-        name = " ".join(t.text for t in left_tokens).replace("  ", " ").strip(" :-")
+        name = " ".join(tok.text for tok in row_tokens_sorted).replace("  ", " ").strip(" :-")
+        name_lower = name.lower()
         if len(name) < 2:
             continue
-        name_lower = name.lower()
         if not re.search(r"[a-z]", name_lower):
             continue
         if any(keyword in name_lower for keyword in non_item_keywords):
             continue
 
-        row_price_tokens.sort(key=lambda pair: pair[0].x)
         unit_price: Optional[float] = None
         total_price: Optional[float] = None
-
-        for token_obj, col_idx in row_price_tokens:
-            value = float(token_obj.text.replace(",", "."))
-            if col_idx == total_col_index:
-                total_price = value
-            elif col_idx == unit_col_index and unit_col_index != total_col_index:
-                unit_price = value
-            elif len(price_columns) == 1:
-                total_price = value
-
-        if total_price is None and unit_price is not None and quantity is not None:
-            total_price = round(unit_price * quantity, 2)
-        if total_price is None and row_price_tokens:
-            total_price = float(row_price_tokens[-1][0].text.replace(",", "."))
-
+        if len(price_values) == 1:
+            total_price = price_values[0]
+        elif len(price_values) >= 2:
+            unit_price = price_values[0]
+            total_price = price_values[-1]
         if total_price is None:
             continue
-
         if unit_price is None and quantity not in (None, 0):
-            derived_unit = round(total_price / quantity, 2)
-            unit_price = derived_unit
+            unit_price = round(total_price / quantity, 2)
 
         item_entry: Dict[str, Any] = {
             "name": name,
@@ -2525,7 +2477,7 @@ def parse_receipt_text(full_text: str, response=None) -> Tuple[Dict, str]:
         }
         if quantity is not None:
             item_entry["quantity"] = quantity
-        if unit_price is not None and not math.isclose(unit_price, total_price):
+        if unit_price is not None and (quantity is None or unit_price != item_entry["price"]):
             item_entry["unit_price"] = round(unit_price, 2)
 
         items.append(item_entry)
@@ -2584,16 +2536,13 @@ def parse_receipt_text(full_text: str, response=None) -> Tuple[Dict, str]:
     markdown_lines.append("| " + " | ".join(headers) + " |")
     markdown_lines.append("|" + "|".join(aligns) + "|")
 
-    def fmt_optional(value: Optional[float]) -> str:
-        return "" if value is None else f"{value:.2f}"
-
     for item in items:
         row_cells = [item["name"]]
         if has_quantity:
             row_cells.append("" if item.get("quantity") is None else str(item["quantity"]))
         if has_unit:
-            row_cells.append(fmt_optional(item.get("unit_price")))
-        row_cells.append(fmt_optional(item.get("price")))
+            row_cells.append("" if item.get("unit_price") is None else f"{item['unit_price']:.2f}")
+        row_cells.append("" if item.get("price") is None else f"{item['price']:.2f}")
         markdown_lines.append("| " + " | ".join(row_cells) + " |")
 
     if total_amount is not None:
@@ -2611,7 +2560,6 @@ def parse_receipt_text(full_text: str, response=None) -> Tuple[Dict, str]:
     markdown_text = "\n".join(markdown_lines)
 
     return receipt_data, markdown_text
-
 
 
 
