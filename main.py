@@ -2442,17 +2442,23 @@ def parse_receipt_text(full_text: str, response=None) -> Tuple[Dict, str]:
 
         if len(price_candidates) == 1:
             # Format 1: Single price (no quantity)
+            print("Single price detected")
             total_price = price_candidates[0][1]
             unit_price = total_price
         elif len(price_candidates) == 2:
             # Format 2: Quantity exists, with unit price and total price
             # Check if first token in left_words is a quantity (single digit)
+            print("Multiple price detected, (with quantity)")
             first_word = left_words[0] if left_words else ""
             if first_word.isdigit() and len(first_word) == 1:
                 quantity = int(first_word)
+                print(f"quantity {quantity}")
                 left_words = left_words[1:]  # Remove quantity from item name
+                print(f"left_words {left_words}")
                 unit_price = price_candidates[0][1]
+                print(f"unit_price {unit_price}")
                 total_price = price_candidates[1][1]
+                print(f"total_price {total_price}")
             else:
                 # Two prices but no quantity indicator - treat second as total
                 unit_price = price_candidates[0][1]
