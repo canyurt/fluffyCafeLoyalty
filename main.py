@@ -242,8 +242,10 @@ async def upload_receipt_endpoint(
             # With this line (Document Text Detection keeps structure)
             response = vision_client.document_text_detection(image=image)            
             texts = response.text_annotations
+            print(f"texts:{texts}")
             
             full_text = texts[0].description if texts else ""
+            print(f"full_text:{full_text}")            
             
             # NEW: Convert to structured schema + markdown
             # receipt_data, markdown_text = parse_receipt_text(full_text)
