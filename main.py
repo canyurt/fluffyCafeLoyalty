@@ -237,7 +237,9 @@ async def upload_receipt_endpoint(
             gcs_uri = f"gs://{settings.storage_receipts_bucket}/{object_name}"
             image = vision.Image()
             image.source.image_uri = gcs_uri
-            response = vision_client.text_detection(image=image)
+            # response = vision_client.text_detection(image=image)
+            # With this line (Document Text Detection keeps structure)
+            response = vision_client.document_text_detection(image=image)            
             texts = response.text_annotations
             
             full_text = texts[0].description if texts else ""
@@ -1518,127 +1520,302 @@ async def upload_receipt_endpoint(
 
 #     return receipt_data, markdown_text
 
+# import re
+# from typing import List, Dict, Optional, Tuple
+
+
+# def parse_receipt_text(full_text: str) -> Tuple[Dict, str]:
+#     """
+#     Convert OCR text into structured data (schema) + markdown view.
+#     Assumes receipt layout is fixed (Fluffy Café receipts).
+#     Fixed to properly extract multiple items with individual prices.
+#     """
+#     text = (full_text or "").replace("\r", "")
+#     store_match = re.search(r"(Fluffy\s+Cafe-?Restaur[a-z]*)", text, re.IGNORECASE)
+#     store_name = (
+#         re.sub(r"\s+", " ", store_match.group(1)).strip()
+#         if store_match
+#         else "Fluffy Cafe-Restaurant"
+#     )
+
+#     terminal_match = re.search(r"([A-Za-z][A-Za-z0-9]*)\s*/\s*([A-Za-z0-9\-]+)", text)
+#     order_device = terminal_match.group(1).strip() if terminal_match else None
+#     employee_no = terminal_match.group(2).strip() if terminal_match else None
+
+#     # Extract reference_no - it appears after Statement, on its own or on same line
+#     # Look for pattern: A followed by digits, dots, etc.
+#     reference_match = re.search(r"[Ss]tatement\s+[A-Z0-9.\-]+\s+([A-Z]\d+[A-Z0-9.]*)", text)
+#     reference_no = reference_match.group(1).strip() if reference_match else None
+
+#     statement_match = re.search(r"Statement\s+([A-Z0-9.\-]+)", text, re.IGNORECASE)
+#     statement_number = statement_match.group(1) if statement_match else None
+
+#     datetime_match = re.search(r"(\d{2}/\d{2}/\d{4}),\s*(\d{2}:\d{2})", text)
+#     date = datetime_match.group(1) if datetime_match else ""
+#     time = datetime_match.group(2) if datetime_match else ""
+
+#     table_match = re.search(r"(?:Tafel|Table)\s*(\d+)", text, re.IGNORECASE)
+#     table = table_match.group(1) if table_match else None
+
+#     # Extract total amount first - this marks the end of items section
+#     total_match = re.search(r"€\s*([\d.,]+)", text)
+#     total_amount = float(total_match.group(1).replace(",", ".")) if total_match else None
+#     total_idx = total_match.start() if total_match else len(text)
+
+#     # Find the section between table and € symbol (which marks total)
+#     items_region_start = table_match.end() if table_match else 0
+#     items_region = text[items_region_start:total_idx]
+
+#     # Extract all prices in this region BEFORE processing
+#     price_pattern = re.compile(r"(\d+[.,]\d{2})")
+#     price_matches = list(price_pattern.finditer(items_region))
+#     price_values = [float(m.group().replace(",", ".")) for m in price_matches]
+
+#     # Split items_region by newlines and process line by line
+#     lines = items_region.split('\n')
+#     item_names: List[str] = []
+    
+#     for line in lines:
+#         line = line.strip()
+#         if not line:
+#             continue
+        
+#         # Remove leading/trailing special characters and whitespace
+#         line = re.sub(r"^[\s•\-=:,]+|[\s•\-=:,]+$", "", line)
+#         if not line:
+#             continue
+        
+#         # Skip if line is just the euro symbol or contains it
+#         if line == "€" or line.startswith("€"):
+#             continue
+        
+#         lowered = line.lower()
+        
+#         # Skip lines that are metadata/non-items
+#         if any(
+#             keyword in lowered
+#             for keyword in ("floor plan", "amount", "division", "payment", "btw", "tax", "dank voor", "lightspeed")
+#         ):
+#             continue
+#         if lowered.startswith(("table", "taf", "restaurant")):
+#             continue
+        
+#         # Remove any trailing price from the line itself
+#         # (in case OCR put price on same line)
+#         line_cleaned = re.sub(r'\s*\d+[.,]\d{2}\s*$', '', line).strip()
+        
+#         if line_cleaned:
+#             item_names.append(line_cleaned)
+
+#     # Match items with prices
+#     # Use the last N prices for the N items found
+#     items: List[Dict] = []
+    
+#     if item_names and len(price_values) >= len(item_names):
+#         # Align: use the last N prices for N items
+#         price_values = price_values[-len(item_names):]
+#         for idx, name in enumerate(item_names):
+#             price_value = round(price_values[idx], 2)
+#             price_value = float(f"{price_value:.2f}")
+#             items.append({"name": name, "price": price_value})
+#     elif item_names:
+#         # Fewer prices than items - assign what we have
+#         for idx, name in enumerate(item_names):
+#             price_value: Optional[float] = None
+#             if idx < len(price_values):
+#                 price_value = round(price_values[idx], 2)
+#                 price_value = float(f"{price_value:.2f}")
+#             items.append({"name": name, "price": price_value})
+
+#     if total_amount is None and items:
+#         summed = sum(item["price"] for item in items if item["price"] is not None)
+#         total_amount = round(summed, 2) if summed else None
+
+#     # Extract tax ID
+#     tax_match = re.search(r"Btw[: ]+([A-Z0-9]+)", text, re.IGNORECASE)
+#     tax_id = tax_match.group(1) if tax_match else None
+
+#     receipt_data = {
+#         "store_name": store_name,
+#         "statement_number": statement_number,
+#         "order_device": order_device,
+#         "employee_no": employee_no,
+#         "reference_no": reference_no,
+#         "date": date,
+#         "time": time,
+#         "table": table,
+#         "items": items,
+#         "total_amount": total_amount,
+#         "tax_id": tax_id,
+#     }
+
+#     # Build markdown view
+#     markdown_lines = [f"# {store_name}", ""]
+#     if date or time:
+#         markdown_lines.append(f"**Date:** {date} {time}".strip())
+#     if table:
+#         markdown_lines.append(f"**Table:** {table}")
+#     if statement_number:
+#         markdown_lines.append(f"**Statement:** {statement_number}")
+#     if reference_no:
+#         markdown_lines.append(f"**Reference:** {reference_no}")
+#     assignment_parts = []
+#     if order_device:
+#         assignment_parts.append(f"Device: {order_device}")
+#     if employee_no:
+#         assignment_parts.append(f"Employee: {employee_no}")
+#     if assignment_parts:
+#         markdown_lines.append("**Assignment:** " + " | ".join(assignment_parts))
+#     markdown_lines.append("\n---\n")
+#     markdown_lines.append("| Item | Price (€) |\n|------|-----------:|")
+#     for item in items:
+#         price_text = f"{item['price']:.2f}" if item["price"] is not None else ""
+#         markdown_lines.append(f"| {item['name']} | {price_text} |")
+#     if total_amount is not None:
+#         markdown_lines.append(f"| **Total** | **{total_amount:.2f}** |")
+#     markdown_lines.append("")
+#     if tax_id:
+#         markdown_lines.append(f"**Tax ID:** {tax_id}")
+#     markdown_text = "\n".join(markdown_lines)
+
+#     return receipt_data, markdown_text
+
 import re
-from typing import List, Dict, Optional, Tuple
+from typing import Any, List, Tuple, Dict  # ensure Optional already imported elsewhere
+from dataclasses import dataclass
 
+@dataclass
+class OCRToken:
+    text: str
+    x: float
+    y: float
+    width: float
+    height: float
 
-def parse_receipt_text(full_text: str) -> Tuple[Dict, str]:
+def parse_receipt_text(full_text: str, response=None) -> Tuple[Dict, str]:
     """
     Convert OCR text into structured data (schema) + markdown view.
-    Assumes receipt layout is fixed (Fluffy Café receipts).
-    Fixed to properly extract multiple items with individual prices.
+    Requires the Vision `document_text_detection` response so we can use bounding boxes.
     """
-    text = (full_text or "").replace("\r", "")
+    if response is None or not response.full_text_annotation.pages:
+        raise ValueError("Vision response with layout required for stable parsing.")
+
+    page = response.full_text_annotation.pages[0]
+
+    def token_stream():
+        for block in page.blocks:
+            for paragraph in block.paragraphs:
+                for word in paragraph.words:
+                    word_text = "".join(symbol.text for symbol in word.symbols)
+                    vertices = word.bounding_box.vertices
+                    xs = [v.x for v in vertices]
+                    ys = [v.y for v in vertices]
+                    x_min, x_max = min(xs), max(xs)
+                    y_min, y_max = min(ys), max(ys)
+                    yield OCRToken(
+                        text=word_text,
+                        x=x_min,
+                        y=y_min,
+                        width=x_max - x_min,
+                        height=y_max - y_min,
+                    )
+
+    tokens: List[OCRToken] = list(token_stream())
+    tokens.sort(key=lambda t: (round(t.y / 6), t.x))  # cluster by approximate line height
+
+    # 1. Recover metadata using the safest fields from `full_text`.
+    text = full_text.replace("\r", "")
     store_match = re.search(r"(Fluffy\s+Cafe-?Restaur[a-z]*)", text, re.IGNORECASE)
     store_name = (
         re.sub(r"\s+", " ", store_match.group(1)).strip()
         if store_match
         else "Fluffy Cafe-Restaurant"
     )
-
     terminal_match = re.search(r"([A-Za-z][A-Za-z0-9]*)\s*/\s*([A-Za-z0-9\-]+)", text)
-    order_device = terminal_match.group(1).strip() if terminal_match else None
-    employee_no = terminal_match.group(2).strip() if terminal_match else None
-
-    # Extract reference_no - it appears after Statement, on its own or on same line
-    # Look for pattern: A followed by digits, dots, etc.
-    reference_match = re.search(r"[Ss]tatement\s+[A-Z0-9.\-]+\s+([A-Z]\d+[A-Z0-9.]*)", text)
-    reference_no = reference_match.group(1).strip() if reference_match else None
-
+    order_device = terminal_match.group(1) if terminal_match else None
+    employee_no = terminal_match.group(2) if terminal_match else None
     statement_match = re.search(r"Statement\s+([A-Z0-9.\-]+)", text, re.IGNORECASE)
     statement_number = statement_match.group(1) if statement_match else None
-
-    datetime_match = re.search(r"(\d{2}/\d{2}/\d{4}),\s*(\d{2}:\d{2})", text)
-    date = datetime_match.group(1) if datetime_match else ""
-    time = datetime_match.group(2) if datetime_match else ""
-
+    date_match = re.search(r"(\d{2}/\d{2}/\d{4})", text)
+    time_match = re.search(r"\d{2}:\d{2}", text)
+    date = date_match.group(1) if date_match else ""
+    time = time_match.group(0) if time_match else ""
     table_match = re.search(r"(?:Tafel|Table)\s*(\d+)", text, re.IGNORECASE)
     table = table_match.group(1) if table_match else None
-
-    # Extract total amount first - this marks the end of items section
     total_match = re.search(r"€\s*([\d.,]+)", text)
     total_amount = float(total_match.group(1).replace(",", ".")) if total_match else None
-    total_idx = total_match.start() if total_match else len(text)
-
-    # Find the section between table and € symbol (which marks total)
-    items_region_start = table_match.end() if table_match else 0
-    items_region = text[items_region_start:total_idx]
-
-    # Extract all prices in this region BEFORE processing
-    price_pattern = re.compile(r"(\d+[.,]\d{2})")
-    price_matches = list(price_pattern.finditer(items_region))
-    price_values = [float(m.group().replace(",", ".")) for m in price_matches]
-
-    # Split items_region by newlines and process line by line
-    lines = items_region.split('\n')
-    item_names: List[str] = []
-    
-    for line in lines:
-        line = line.strip()
-        if not line:
-            continue
-        
-        # Remove leading/trailing special characters and whitespace
-        line = re.sub(r"^[\s•\-=:,]+|[\s•\-=:,]+$", "", line)
-        if not line:
-            continue
-        
-        # Skip if line is just the euro symbol or contains it
-        if line == "€" or line.startswith("€"):
-            continue
-        
-        lowered = line.lower()
-        
-        # Skip lines that are metadata/non-items
-        if any(
-            keyword in lowered
-            for keyword in ("floor plan", "amount", "division", "payment", "btw", "tax", "dank voor", "lightspeed")
-        ):
-            continue
-        if lowered.startswith(("table", "taf", "restaurant")):
-            continue
-        
-        # Remove any trailing price from the line itself
-        # (in case OCR put price on same line)
-        line_cleaned = re.sub(r'\s*\d+[.,]\d{2}\s*$', '', line).strip()
-        
-        if line_cleaned:
-            item_names.append(line_cleaned)
-
-    # Match items with prices
-    # Use the last N prices for the N items found
-    items: List[Dict] = []
-    
-    if item_names and len(price_values) >= len(item_names):
-        # Align: use the last N prices for N items
-        price_values = price_values[-len(item_names):]
-        for idx, name in enumerate(item_names):
-            price_value = round(price_values[idx], 2)
-            price_value = float(f"{price_value:.2f}")
-            items.append({"name": name, "price": price_value})
-    elif item_names:
-        # Fewer prices than items - assign what we have
-        for idx, name in enumerate(item_names):
-            price_value: Optional[float] = None
-            if idx < len(price_values):
-                price_value = round(price_values[idx], 2)
-                price_value = float(f"{price_value:.2f}")
-            items.append({"name": name, "price": price_value})
-
-    if total_amount is None and items:
-        summed = sum(item["price"] for item in items if item["price"] is not None)
-        total_amount = round(summed, 2) if summed else None
-
-    # Extract tax ID
     tax_match = re.search(r"Btw[: ]+([A-Z0-9]+)", text, re.IGNORECASE)
     tax_id = tax_match.group(1) if tax_match else None
+
+    # 2. Determine horizontal split (names vs prices) by median X of euro prices.
+    price_tokens = [t for t in tokens if re.fullmatch(r"\d+[.,]\d{2}", t.text)]
+    if not price_tokens:
+        raise ValueError("No price tokens detected in layout; cannot build item list.")
+
+    price_column_x = statistics.median(t.x for t in price_tokens)
+    row_clusters: List[List[OCRToken]] = []
+
+    for token in tokens:
+        assigned = False
+        for row in row_clusters:
+            if abs(row[0].y - token.y) <= max(row[0].height, token.height) * 0.6:
+                row.append(token)
+                assigned = True
+                break
+        if not assigned:
+            row_clusters.append([token])
+
+    items: List[Dict[str, Optional[float]]] = []
+    for row in row_clusters:
+        row.sort(key=lambda t: t.x)
+        left_words = [t.text for t in row if t.x + t.width < price_column_x]
+        right_prices = [t.text for t in row if t.x >= price_column_x or t.text == "€"]
+
+        if not left_words:
+            continue
+
+        possible_price = None
+        for candidate in reversed(right_prices):
+            if re.fullmatch(r"\d+[.,]\d{2}", candidate):
+                possible_price = float(candidate.replace(",", "."))
+                break
+
+        name = " ".join(left_words).strip(" :-")
+        if any(k in name.lower() for k in ("floor plan", "amount due", "division hint")):
+            continue
+
+        items.append({"name": name, "price": possible_price})
+
+    # 3. Keep only meaningful rows: at least two characters, price or subsequent price.
+    filtered: List[Dict[str, Optional[float]]] = []
+    for item in items:
+        if len(item["name"]) < 2:
+            continue
+        filtered.append(item)
+    items = filtered
+
+    # 4. Fall back: if a row has no price, look for the next price-only row.
+    for idx, item in enumerate(items):
+        if item["price"] is None:
+            for future in items[idx + 1:]:
+                if future["price"] is not None and future["name"] == "":
+                    item["price"] = future["price"]
+                    future["price"] = None
+                    break
+
+    # 5. Remove empty placeholder rows produced by previous step.
+    items = [item for item in items if item["name"]]
+
+    # 6. Recompute total if missing.
+    if total_amount is None and items:
+        prices = [item["price"] for item in items if item["price"] is not None]
+        total_amount = round(sum(prices), 2) if prices else None
 
     receipt_data = {
         "store_name": store_name,
         "statement_number": statement_number,
         "order_device": order_device,
         "employee_no": employee_no,
-        "reference_no": reference_no,
         "date": date,
         "time": time,
         "table": table,
@@ -1647,7 +1824,6 @@ def parse_receipt_text(full_text: str) -> Tuple[Dict, str]:
         "tax_id": tax_id,
     }
 
-    # Build markdown view
     markdown_lines = [f"# {store_name}", ""]
     if date or time:
         markdown_lines.append(f"**Date:** {date} {time}".strip())
@@ -1655,8 +1831,6 @@ def parse_receipt_text(full_text: str) -> Tuple[Dict, str]:
         markdown_lines.append(f"**Table:** {table}")
     if statement_number:
         markdown_lines.append(f"**Statement:** {statement_number}")
-    if reference_no:
-        markdown_lines.append(f"**Reference:** {reference_no}")
     assignment_parts = []
     if order_device:
         assignment_parts.append(f"Device: {order_device}")
@@ -1674,13 +1848,9 @@ def parse_receipt_text(full_text: str) -> Tuple[Dict, str]:
     markdown_lines.append("")
     if tax_id:
         markdown_lines.append(f"**Tax ID:** {tax_id}")
+
     markdown_text = "\n".join(markdown_lines)
-
     return receipt_data, markdown_text
-
-
-
-
 
 
 
