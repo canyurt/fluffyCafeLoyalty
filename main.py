@@ -245,7 +245,8 @@ async def upload_receipt_endpoint(
             full_text = texts[0].description if texts else ""
             
             # NEW: Convert to structured schema + markdown
-            receipt_data, markdown_text = parse_receipt_text(full_text)
+            # receipt_data, markdown_text = parse_receipt_text(full_text)
+            receipt_data, markdown_text = parse_receipt_text(full_text, response=response)
             
             update_data = {
                 "status": "ready",
