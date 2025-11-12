@@ -2408,8 +2408,19 @@ def parse_receipt_text(full_text: str, response=None) -> Tuple[Dict, str]:
         "nl",
     }
 
+    skip_next_row = False    
+    
     items: List[Dict[str, Any]] = []
     for row in rows:
+        if skip_next_row:
+            skip_next_row = False
+            continue
+
+        row_text_lower = " ".join(tok.text for tok in row["tokens"]).lower()
+        if "hint" in row_text_lower:
+            skip_next_row = True
+            continue
+
         center_y = row["center_y"]
         if table_baseline is not None and center_y <= table_baseline:
             continue
