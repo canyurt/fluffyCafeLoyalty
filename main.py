@@ -2320,15 +2320,26 @@ def parse_receipt_text(full_text: str, response=None) -> Tuple[Dict, str]:
     tokens: List[OCRToken] = list(token_stream())
 
     # NEW: normalize coordinates if Vision reported them in a 90° clockwise frame
+    # tall_tokens = sum(1 for t in tokens if t.height > t.width * 1.4)
+    # rotated_clockwise = tall_tokens / max(len(tokens), 1) > 0.6
+
+    # if rotated_clockwise:
+    #     page_width = page.width
+    #     for t in tokens:
+    #         original_x, original_y = t.x, t.y
+    #         t.x = original_y
+    #         t.y = page_width - (original_x + t.width)
+    #         t.width, t.height = t.height, t.width
+    
+    # Detect Vision’s 90° clockwise reporting and swap axes if needed
     tall_tokens = sum(1 for t in tokens if t.height > t.width * 1.4)
     rotated_clockwise = tall_tokens / max(len(tokens), 1) > 0.6
 
     if rotated_clockwise:
-        page_width = page.width
         for t in tokens:
             original_x, original_y = t.x, t.y
-            t.x = original_y
-            t.y = page_width - (original_x + t.width)
+            t.x = original_y            # use the original column value
+            t.y = original_x            # use the original row value
             t.width, t.height = t.height, t.width
     
     print(f"[parse_receipt_text] total_tokens={len(tokens)}")
