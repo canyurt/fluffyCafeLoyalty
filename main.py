@@ -447,7 +447,8 @@ def parse_receipt_text(full_text: str, response=None) -> Tuple[Dict, str]:
             anchor = cluster[0]
             anchor_center = anchor.y + anchor.height / 2
             token_center = token.y + token.height / 2
-            if abs(anchor_center - token_center) <= max(anchor.height, token.height) * 0.45:
+            # if abs(anchor_center - token_center) <= max(anchor.height, token.height) * 0.45:
+            if abs(anchor_center - token_center) <= max(anchor.height, token.height) * 0.60:
                 cluster.append(token)
                 placed = True
                 break
