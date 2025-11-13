@@ -2295,6 +2295,7 @@ def parse_receipt_text(full_text: str, response=None) -> Tuple[Dict, str]:
         raise ValueError("Vision response with layout required for stable parsing.")
 
     page = response.full_text_annotation.pages[0]
+    print(f"full_text_annotation: {full_text_annotation}")
 
     def token_stream():
         for block in page.blocks:
